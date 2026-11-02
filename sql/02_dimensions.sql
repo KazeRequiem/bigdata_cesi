@@ -1,7 +1,7 @@
 -- Tables de dimensions (schéma gold), d'après le dictionnaire de données.
 -- sk_* : clé technique. La ligne sk = -1 sert de valeur "Inconnu" pour les faits
 -- dont la référence est absente.
--- À créer avant les faits, et dim_geographie avant dim_patient / dim_etablissement.
+-- À créer avant les faits, et dim_geographie avant dim_etablissement.
 
 -- Calendrier, rempli par 03_dim_temps.sql
 CREATE TABLE gold.dim_temps (
@@ -35,7 +35,7 @@ CREATE TABLE gold.dim_patient (
     id_patient_pseudo  CHAR(64)  NOT NULL UNIQUE,        -- HMAC-SHA256
     sexe_patient       CHAR(1)   NOT NULL CHECK (sexe_patient IN ('M', 'F', 'I')),
     annee_naissance    SMALLINT  CHECK (annee_naissance BETWEEN 1880 AND 2100),
-    sk_geo             INTEGER   NOT NULL DEFAULT -1 REFERENCES gold.dim_geographie (sk_geo)  -- commune de résidence
+    code_departement   VARCHAR(3) CHECK (code_departement ~ '^([0-9]{2}|2A|2B|97[1-6])$')  -- département de résidence
 );
 
 CREATE TABLE gold.dim_professionnel (
@@ -92,7 +92,7 @@ INSERT INTO gold.dim_geographie
 VALUES (-1, '00000', 'Inconnue', '00', 'Inconnu', '00', 'Inconnue');
 
 INSERT INTO gold.dim_patient
-VALUES (-1, repeat('0', 64), 'I', NULL, -1);
+VALUES (-1, repeat('0', 64), 'I', NULL, NULL);
 
 INSERT INTO gold.dim_professionnel
 VALUES (-1, 'INCONNU', NULL, NULL, NULL, 'Inconnu', NULL, 'Inconnue', NULL);
