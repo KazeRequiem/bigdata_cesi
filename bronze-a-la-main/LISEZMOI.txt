@@ -1,0 +1,197 @@
+=============================================================================
+ COUCHE BRONZE : SeaweedFS (stockage) + Apache NiFi (ingestion)
+ Projet Cloud Healthcare Unit - CESI A4 FISA - bloc Big Data
+=============================================================================
+
+1. CE QUE FAIT CE DOSSIER
+-------------------------
+Il lance deux conteneurs Docker :
+
+  - SeaweedFS : un stockage de fichiers compatible Amazon S3. On y crée un
+    "bucket" (dossier racine) nommé "bronze" : c'est la couche Bronze, la copie
+    brute et fidèle des sources.
+  - NiFi : l'outil qui lit les fichiers sources et les dépose dans Bronze.
+
+Pour chaque fichier reçu, NiFi dépose dans Bronze :
+  - une copie fidèle, rangée par source et par date :
+        bronze/s1_hospitalisations/2026-11-02/Hospitalisations.csv
+  - un manifeste JSON à côté, qui note le nom, la taille, la date d'envoi et
+    l'empreinte SHA-256 du fichier (preuve qu'il n'a pas été modifié) :
+        bronze/s1_hospitalisations/2026-11-02/Hospitalisations.csv.manifest.json
+
+Source branchée pour l'instant : les hospitalisations (un CSV).
+Prévu ensuite : établissements, SFTP (satisfaction, décès), base PostgreSQL.
+
+
+2. CE QU'IL FAUT AVANT DE COMMENCER
+-----------------------------------
+  - Docker Desktop installé et LANCÉ (Docker Compose v2.23 ou plus récent).
+  - Environ 4 Go de mémoire libre et 5 Go de disque.
+  - Le dossier de données du projet ("DATA 2024") copié sur ton PC. Il doit
+    contenir un sous-dossier "Hospitalisation" avec "Hospitalisations.csv".
+  - Un terminal : l'invite de commandes Windows (cmd) ou Git Bash.
+
+
+3. PREMIER LANCEMENT (une seule fois)
+-------------------------------------
+Toutes les commandes se tapent dans ce dossier (bronze-a-la-main).
+
+  Étape 1 - Créer ton fichier de configuration
+      cmd :       copy .env.example .env
+      Git Bash :  cp .env.example .env
+    Ouvre ".env" avec le Bloc-notes et remplace les valeurs :
+      S3_ACCESS_KEY / S3_SECRET_KEY : les clés d'accès au stockage (au choix)
+      NIFI_USER / NIFI_PASSWORD     : compte NiFi (mot de passe 12 caractères
+                                      minimum, sinon NiFi refuse de démarrer)
+      DATA_DIR                      : chemin du dossier de données, avec des "/"
+                                      (ex. C:/Users/toi/Downloads/DATA 2024)
+    Le fichier .env n'est JAMAIS commité (il est dans .gitignore).
+
+  Étape 2 - Démarrer les deux conteneurs
+      docker compose up -d
+    La première fois, Docker télécharge les images (environ 3 Go).
+    Vérifier : docker compose ps   ->  les deux services doivent être "Up".
+
+  Étape 3 - Créer le bucket "bronze" (une seule fois, les données restent)
+      cmd :       docker compose exec -T seaweedfs sh -c "echo s3.bucket.create -name bronze | weed shell"
+      Git Bash :  docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.create -name bronze" | weed shell'
+    Résultat attendu : "created bucket bronze".
+    Contrôle : http://localhost:8888/buckets/  doit montrer un dossier "bronze".
+
+  Étape 4 - Ouvrir NiFi (attendre environ 30 secondes après le démarrage)
+      https://localhost:8443/nifi      (bien écrire https)
+    Le navigateur affiche "Votre connexion n'est pas privée" : c'est normal, NiFi
+    fabrique lui-même son certificat. Clique sur "Paramètres avancés" puis
+    "Continuer vers localhost". Si le bouton manque : clique dans la page et
+    tape au clavier : thisisunsafe
+    Connexion : NIFI_USER et NIFI_PASSWORD de ton fichier .env.
+
+  Étape 5 - Mettre en place le flux (voir la section 4 ci-dessous).
+
+
+4. LE FLUX NIFI (la recette)
+----------------------------
+Le flux se dessine dans NiFi : 7 blocs reliés par des flèches "success".
+
+  ListFile -> FetchFile -> CryptographicHashContent -> UpdateAttribute
+           -> PutS3Object -> AttributesToJSON -> PutS3Object (manifeste)
+
+  Réglages bloc par bloc (onglet Properties, sauf mention contraire) :
+
+  ListFile
+    Input Directory : /data/hospitalisation
+
+  FetchFile
+    (réglages par défaut) ; Relationships : terminate failure, not.found,
+    permission.denied
+
+  CryptographicHashContent
+    Hash Algorithm : SHA-256 (défaut) ; Relationships : terminate failure
+
+  UpdateAttribute  (bouton "+" pour ajouter chaque propriété)
+    source       = s1_hospitalisations
+    ingest.date  = ${now():format('yyyy-MM-dd')}
+    bronze.key   = s1_hospitalisations/${now():format('yyyy-MM-dd')}/${filename}
+
+  PutS3Object  (le fichier)
+    Bucket                       : bronze
+    Object Key                   : ${bronze.key}
+    Region                       : US East (N. Virginia)
+    Endpoint Override URL        : http://seaweedfs:8333
+    Use Path Style Access        : true
+    AWS Credentials Provider Svc : AWSCredentialsProviderControllerService
+        (à créer : clic droit sur une zone vide > Controller Services > "+")
+        Access Key ID     = la valeur de S3_ACCESS_KEY du .env
+        Secret Access Key = la valeur de S3_SECRET_KEY du .env
+        puis l'activer (éclair > Enable, "Service only")
+    Relationships : terminate failure uniquement (success va au bloc suivant)
+
+  AttributesToJSON
+    Attributes List : source,bronze.key,filename,file.size,file.lastModifiedTime,content_SHA-256,ingest.date
+    Destination             : flowfile-content
+    Include Core Attributes : false
+    Pretty Print            : true
+    Relationships : terminate failure
+
+  PutS3Object - manifeste  (copie du PutS3Object ci-dessus : Ctrl+C, Ctrl+V)
+    Object Key   : ${bronze.key}.manifest.json
+    Content Type : application/json
+    Relationships : terminate success ET failure
+
+  Pour démarrer : Ctrl+A sur le canevas, clic droit, Start.
+  Pour renvoyer un fichier déjà vu : clic droit sur ListFile > View state >
+  Clear state (le flux doit être arrêté).
+
+
+5. VÉRIFIER QUE ÇA MARCHE
+-------------------------
+  - Explorateur de fichiers : http://localhost:8888/buckets/bronze/
+  - Le manifeste d'un fichier :
+      http://localhost:8888/buckets/bronze/s1_hospitalisations/<date>/Hospitalisations.csv.manifest.json
+  - L'empreinte du fichier d'origine, à comparer avec "content_SHA-256" :
+      cmd :  certutil -hashfile "<DATA_DIR>\Hospitalisation\Hospitalisations.csv" SHA256
+  - Dans NiFi : clic droit sur un bloc > View data provenance > menu "..." d'une
+    ligne SEND > View Details > onglet Attributes.
+
+
+6. AU QUOTIDIEN
+---------------
+  Démarrer             docker compose up -d
+  Arrêter (sans perte) docker compose stop        ou        docker compose down
+  État                 docker compose ps
+  Journaux de NiFi     docker compose logs -f nifi        (Ctrl+C pour quitter)
+  Journaux SeaweedFS   docker compose logs -f seaweedfs
+
+  Les fichiers de Bronze et le flux NiFi sont conservés dans des "volumes"
+  Docker : ils survivent à "stop" et à "down".
+
+  !!! JAMAIS : docker compose down -v      (supprime les volumes : Bronze et le
+                                            flux NiFi sont effacés)
+  !!! JAMAIS : docker volume prune         (même effet, sur tous les projets)
+
+
+7. DÉPANNAGE
+------------
+  "port is already allocated" au démarrage
+      Un autre programme utilise le port (8443, 8333 ou 8888). Le fermer, ou
+      changer le port dans docker-compose.yml.
+
+  "variable is missing" / "Définir ... dans le fichier .env"
+      Le fichier .env n'existe pas ou une ligne manque : refaire l'étape 1.
+
+  NiFi ne répond pas dans le navigateur
+      Attendre 30 s de plus (docker compose logs -f nifi, chercher "Started
+      Application"). Vérifier "https" et non "http".
+
+  NiFi refuse de démarrer
+      NIFI_PASSWORD fait moins de 12 caractères.
+
+  Un bloc PutS3Object est en erreur (carré rouge avec "!")
+      Passer la souris dessus pour lire le message. Causes fréquentes : mauvaise
+      clé dans le service AWSCredentialsProviderControllerService, "Use Path
+      Style Access" pas à true, URL "http://seaweedfs:8333" mal écrite.
+
+  Un bloc a un triangle jaune
+      Il est invalide : survoler le triangle. Souvent une issue (success,
+      failure) ni reliée ni cochée "terminate".
+
+  Le fichier n'est pas renvoyé à un deuxième passage
+      Normal : ListFile se souvient de ce qu'il a déjà vu. View state > Clear
+      state (flux arrêté).
+
+
+8. CE QUI EST DANS GIT, ET CE QUI NE L'EST PAS
+----------------------------------------------
+  Dans Git :
+    docker-compose.yml   les deux conteneurs
+    .env.example         le modèle de configuration (sans secret)
+    .gitignore           exclut le fichier .env
+    LISEZMOI.txt         ce document
+
+  Hors de Git :
+    .env                 les secrets de chaque personne
+    les données          volume Docker "seaweed_data" (Bronze)
+    le flux NiFi         volume Docker "nifi_conf" (à exporter, voir ci-dessous)
+
+  À faire : versionner le flux NiFi lui-même (export JSON et/ou NiFi Registry
+  avec GitHub), pour qu'un collègue le retrouve en clonant le dépôt.

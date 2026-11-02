@@ -1,0 +1,2 @@
+# Secrets locaux : jamais dans Git
+.env
