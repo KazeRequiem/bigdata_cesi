@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import os
 import re
 import unicodedata
@@ -35,6 +34,9 @@ def get_spark(app: str = "silver") -> SparkSession:
         .config("spark.sql.ansi.enabled", "false")
         .config("spark.sql.legacy.timeParserPolicy", "CORRECTED")
         .config("spark.sql.session.timeZone", "Europe/Paris")
+        # Le lecteur Parquet vectorisé d'Iceberg fait planter la JVM (SIGSEGV
+        # dans VectorizedDictionaryEncodedParquetValuesReader) : lecture classique.
+        .config("spark.sql.iceberg.vectorization.enabled", "false")
         .getOrCreate()
     )
 
@@ -84,12 +86,13 @@ MANIFEST_SUFFIX = ".manifest.json"
 
 
 def _with_lineage(df: DataFrame, file_col: Column) -> DataFrame:
-    """Ajoute _fichier, _ligne (numéro de ligne dans le fichier) et _ingest_date."""
-    df = df.withColumn("_fichier", file_col).withColumn("_mid", F.monotonically_increasing_id())
-    w = Window.partitionBy("_fichier").orderBy("_mid")
-    return (df.withColumn("_ligne", F.row_number().over(w))
-              .withColumn("_ingest_date", F.to_date(F.regexp_extract("_fichier", _INGEST_RE, 1)))
-              .drop("_mid"))
+    """Ajoute _fichier, _ligne (position croissante dans le fichier) et _ingest_date.
+    _ligne vient de monotonically_increasing_id : exacte pour un fichier lu en une
+    partition, croissante mais non contiguë sinon. Un row_number() par fichier
+    mettrait tout le fichier des décès (25 M lignes) dans une seule tâche."""
+    return (df.withColumn("_fichier", file_col)
+              .withColumn("_ligne", F.monotonically_increasing_id() + 1)
+              .withColumn("_ingest_date", F.to_date(F.regexp_extract("_fichier", _INGEST_RE, 1))))
 
 
 def _detect_sep(first_line: str) -> str:
@@ -97,14 +100,16 @@ def _detect_sep(first_line: str) -> str:
     return max(counts, key=counts.get)
 
 
-def _read_one_csv(spark, f, encoding):
+def _read_one_csv(spark, f, encoding, multiline=True):
+    """multiline=False pour les gros fichiers sans retour à la ligne dans les champs :
+    multiLine rend le fichier non découpable (lu en une seule tâche)."""
     raw = spark.read.option("sep", "\u0001").option("encoding", encoding).csv(f)
     first = raw.first()
     if first is None:
         return None
     sep = _detect_sep(first[0] or "")
     return (spark.read.option("header", True).option("sep", sep).option("encoding", encoding)
-            .option("quote", '"').option("escape", '"').option("multiLine", True).csv(f))
+            .option("quote", '"').option("escape", '"').option("multiLine", multiline).csv(f))
 
 
 def _read_xlsx(spark, f):
@@ -143,8 +148,15 @@ def _read_insee_fixe(spark, f, encoding):
 
 
 def _sha256(spark, f: str) -> str:
-    data = spark.sparkContext.binaryFiles(f).first()[1]
-    return hashlib.sha256(data).hexdigest()
+    """Empreinte calculée en flux dans la JVM : le fichier des décès (2 Go) ne
+    tient pas en mémoire d'un bloc."""
+    jvm = spark._jvm
+    p = jvm.org.apache.hadoop.fs.Path(f)
+    stream = p.getFileSystem(spark._jsc.hadoopConfiguration()).open(p)
+    try:
+        return jvm.org.apache.commons.codec.digest.DigestUtils.sha256Hex(stream)
+    finally:
+        stream.close()
 
 
 def _check_manifest(spark, f: str, manifest: str) -> None:
@@ -243,7 +255,7 @@ def read_bronze(spark: SparkSession, settings: Settings, source: str,
         if kind == "xlsx":
             df = _read_xlsx(spark, f)
         elif kind == "csv":
-            df = _read_one_csv(spark, f, enc)
+            df = _read_one_csv(spark, f, enc, cfg.get("csv_multiline", True))
         elif kind == "json":
             df = spark.read.option("multiLine", cfg.get("multiline", True)).json(f)
         elif kind == "insee_fixe":
@@ -434,10 +446,16 @@ def hmac_key(settings: Settings) -> bytes:
 
 def pseudo(c: Column, key: bytes) -> Column:
     """HMAC-SHA256 en hexadécimal (64 caractères). Même clé pour toutes les tables :
-    un même identifiant donne toujours le même pseudonyme, les jointures marchent."""
-    def _h(v):
-        return None if v is None else hmac.new(key, v.encode("utf-8"), hashlib.sha256).hexdigest()
-    return F.udf(_h, T.StringType())(c)
+    un même identifiant donne toujours le même pseudonyme, les jointures marchent.
+    Calcul natif Spark (RFC 2104 : H((K^opad) || H((K^ipad) || m))), identique à
+    hmac.new(key, v, sha256).hexdigest() mais sans aller-retour vers Python."""
+    if len(key) > 64:
+        key = hashlib.sha256(key).digest()
+    key = key.ljust(64, b"\0")
+    ipad = F.unhex(F.lit(bytes(b ^ 0x36 for b in key).hex()))
+    opad = F.unhex(F.lit(bytes(b ^ 0x5C for b in key).hex()))
+    inner = F.unhex(F.sha2(F.concat(ipad, F.encode(c, "UTF-8")), 256))
+    return F.sha2(F.concat(opad, inner), 256)
 
 
 def pseudo_join(df: DataFrame, col_in: str, col_out: str, key: bytes) -> DataFrame:

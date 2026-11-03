@@ -14,6 +14,7 @@ import sys
 import uuid
 from datetime import datetime
 
+from pyspark import StorageLevel
 from pyspark.sql import functions as F
 
 from . import contract
@@ -47,7 +48,9 @@ def run_job(ctx: Ctx, module) -> dict:
     stats = {"run_id": ctx.run_id, "table_silver": table, "debut": started, "ingest_date": ctx.ingest_date}
     try:
         out = module.build(ctx, q)
-        df = _conform(table, out.df).withColumn("_run_id", F.lit(ctx.run_id)).cache()
+        # Sur disque : en mémoire, les 25 M décès occupaient l'essentiel du tas et
+        # ne laissaient plus de place à l'écriture Iceberg (OutOfMemoryError).
+        df = _conform(table, out.df).withColumn("_run_id", F.lit(ctx.run_id)).persist(StorageLevel.DISK_ONLY)
         quarantine = q.frame(ctx.spark).withColumn("run_id", F.lit(ctx.run_id)) \
                                        .withColumn("horodatage", F.current_timestamp()).cache()
 
