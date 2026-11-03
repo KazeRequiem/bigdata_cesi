@@ -47,6 +47,10 @@ services:
         target: /data/etablissements
         read_only: true
       - ./nifi-drivers:/opt/nifi/drivers:ro
+      - type: bind
+        source: ${DATA_DIR}/COG
+        target: /data/cog
+        read_only: true
     ports:
       - "127.0.0.1:8443:8443"
   sftp:
