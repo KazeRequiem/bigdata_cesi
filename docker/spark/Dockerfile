@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Spark 3.5 + Iceberg (catalogue JDBC dans PostgreSQL) + accès S3 + driver PostgreSQL
+# Spark 3.5 + Iceberg (catalogue JDBC dans PostgreSQL) + accès S3 + Avro + driver PostgreSQL
 FROM apache/spark:3.5.6-scala2.12-java17-python3-ubuntu
 
 USER root
@@ -12,6 +12,8 @@ ADD --chmod=644 ${MAVEN}/org/apache/iceberg/iceberg-spark-runtime-3.5_2.12/${ICE
 ADD --chmod=644 ${MAVEN}/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar /opt/spark/jars/
 ADD --chmod=644 ${MAVEN}/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar /opt/spark/jars/
 ADD --chmod=644 ${MAVEN}/org/postgresql/postgresql/42.7.4/postgresql-42.7.4.jar /opt/spark/jars/
+# tables de la base de soins déposées en Avro par NiFi
+ADD --chmod=644 ${MAVEN}/org/apache/spark/spark-avro_2.12/3.5.6/spark-avro_2.12-3.5.6.jar /opt/spark/jars/
 
 RUN pip3 install --no-cache-dir "openpyxl>=3.1" "pytest>=8"
 
