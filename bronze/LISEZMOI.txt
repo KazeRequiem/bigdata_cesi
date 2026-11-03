@@ -47,7 +47,7 @@ format Parquet n'existe pas dans cette version de NiFi.
 
 3. PREMIER LANCEMENT (une seule fois)
 -------------------------------------
-Toutes les commandes se tapent dans ce dossier (bronze-a-la-main).
+Toutes les commandes se tapent dans ce dossier (bronze).
 
   Étape 1 - Créer ton fichier de configuration
       cmd :       copy .env.example .env
@@ -99,7 +99,7 @@ Toutes les commandes se tapent dans ce dossier (bronze-a-la-main).
     Connexion : NIFI_USER et NIFI_PASSWORD de ton fichier .env.
 
   Étape 7 - Mettre en place les flux : importer les fichiers du dossier nifi/
-    (section 4), ou les dessiner à la main (section 5).
+    (section 4), ou les dessiner soi-même (section 5).
 
 
 4. IMPORTER LES FLUX NIFI (le plus rapide)
@@ -143,7 +143,7 @@ bronze_s2_etablissements.json, bronze_s3_satisfaction.json, bronze_s4_deces.json
      Démarrer les groupes un par un (le fichier des décès pèse 2 Go).
 
 
-5. LES FLUX NIFI (la recette, pour les redessiner à la main)
+5. LES FLUX NIFI (la recette, pour les redessiner soi-même)
 -------------------------------------------------------------
 Chaque flux est une chaîne de blocs reliés par des flèches "success". La fin
 est la même pour les cinq :

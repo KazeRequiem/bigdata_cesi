@@ -1,6 +1,10 @@
 # Couche Bronze : SeaweedFS (stockage compatible S3) + Apache NiFi (ingestion).
 # Les secrets et les chemins viennent du fichier .env (voir .env.example).
 
+# Nom du projet Docker : il préfixe les conteneurs (bronze-nifi-1...) et les volumes (bronze_seaweed_data...).
+# Le figer évite que les volumes changent de nom (et paraissent vides) si le dossier est renommé.
+name: bronze
+
 # Fichier de clés S3 fabriqué à partir du .env, puis monté dans le conteneur SeaweedFS.
 configs:
   s3_config:

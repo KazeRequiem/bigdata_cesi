@@ -5,4 +5,4 @@
 !.env.example
 
 # Pilote JDBC de NiFi : binaire à télécharger (voir LISEZMOI.txt), pas à versionner
-bronze-a-la-main/nifi-drivers/*.jar
+bronze/nifi-drivers/*.jar
