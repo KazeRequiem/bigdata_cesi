@@ -1,3 +1,5 @@
 -- Exécuté au premier démarrage (volume vide).
--- Base séparée pour le catalogue Iceberg (métadonnées des tables Silver).
+-- iceberg_catalog : métadonnées des tables Silver
+-- superset        : métadonnées de Superset (utilisateurs, graphiques, tableaux de bord)
 CREATE DATABASE iceberg_catalog;
+CREATE DATABASE superset;

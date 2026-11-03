@@ -92,6 +92,34 @@ services:
       - pgadmin_data:/var/lib/pgadmin
       - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
 
+  # Tableaux de bord (Livrable 3) : http://localhost:8088
+  superset:
+    build: ./docker/superset
+    image: chu-superset:4.1
+    container_name: chu-superset
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUPERSET_CONFIG_PATH: /app/superset_config_chu.py
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL}
+      # base de métadonnées "superset" (compte administrateur)
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # source de données : couche Gold, compte bi en lecture seule
+      POSTGRES_DB: ${POSTGRES_DB}
+      BI_USER: ${BI_USER}
+      BI_PASSWORD: ${BI_PASSWORD}
+    command: ["/app/init_chu.sh"]
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./docker/superset/superset_config.py:/app/superset_config_chu.py:ro
+
 volumes:
   pg_data:
   silver_warehouse:
