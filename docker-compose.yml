@@ -1,0 +1,74 @@
+# Stack Silver + Gold.
+#   cp .env.example .env
+#   docker compose up -d --build
+
+name: chu-lakehouse
+
+services:
+
+  # Gold (chu_dw) + catalogue Iceberg (iceberg_catalog)
+  postgres:
+    image: postgres:18
+    container_name: chu-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # mêmes réglages pour toutes les mesures du benchmark
+    command: >
+      postgres
+      -c shared_buffers=1GB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+      -c effective_cache_size=3GB
+      -c max_parallel_workers_per_gather=2
+      -c random_page_cost=1.1
+    shm_size: 1gb
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql          # PostgreSQL 18 : plus /var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ./sql:/sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Spark 3.5 + Iceberg : jobs Silver et export vers staging
+  spark:
+    build: ./docker/spark
+    image: chu-spark:3.5
+    container_name: chu-spark
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ICEBERG_CATALOG_DB: ${ICEBERG_CATALOG_DB}
+      ICEBERG_WAREHOUSE: file:///data/warehouse
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
+      BRONZE_ROOT: /data/bronze               # en attendant SeaweedFS : s3a://bronze
+      SILVER_STORAGE: iceberg
+      SILVER_CATALOG: lake
+      SILVER_NAMESPACE: silver
+      SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
+      PG_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      PG_USER: ${POSTGRES_USER}
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+    command: ["sleep", "infinity"]
+    ports:
+      - "4040:4040"   # Spark UI pendant un job
+    volumes:
+      - ./silver:/opt/silver
+      - ./data/bronze:/data/bronze:ro
+      - silver_warehouse:/data/warehouse
+
+volumes:
+  pg_data:
+  silver_warehouse:
