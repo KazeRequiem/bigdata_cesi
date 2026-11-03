@@ -201,6 +201,8 @@ SOURCES: dict[str, dict] = {
     # Le format officiel INSEE à largeur fixe reste possible : format "insee_fixe".
     "s4_deces": {
         "path": "s4_deces", "include": r"(?i)deces[^/]*\.(csv|txt)$",
+        # 2 Go sans champ multiligne : lecture découpée en blocs, en parallèle
+        "csv_multiline": False,
         "columns": {
             "sexe": ["sexe"],
             "date_naissance": ["date_naissance", "datenaiss"],

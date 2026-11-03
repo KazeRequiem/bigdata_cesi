@@ -70,6 +70,15 @@ class SilverStore:
         ont changé (les colonnes techniques "_..." sont ignorées pour ce test)."""
         if self.iceberg:
             df = self._align(name, df)
+            # Premier chargement : simple append. Le MERGE sur une table vide écrit tout
+            # dans une seule tâche avec un fichier ouvert par partition (décès : un par
+            # mois depuis 1970) et sature la mémoire.
+            if self.spark.table(self.table_id(name)).limit(1).count() == 0:
+                df.writeTo(self.table_id(name)).append()
+                return
+            # localCheckpoint : MERGE refuse une source dont le plan contient du non
+            # déterministe (monotonically_increasing_id de la lecture Bronze)
+            df = df.localCheckpoint()
             view = f"_src_{name}"
             df.createOrReplaceTempView(view)
             on = " AND ".join(f"t.{k} <=> s.{k}" for k in keys)

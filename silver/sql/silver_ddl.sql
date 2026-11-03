@@ -161,8 +161,12 @@ CREATE TABLE IF NOT EXISTS lake.silver.deces (
     _ingest_date         DATE,
     _run_id              STRING
 ) USING iceberg
-PARTITIONED BY (months(date_deces))
+PARTITIONED BY (years(date_deces))
 TBLPROPERTIES ('format-version' = '2', 'write.merge.mode' = 'merge-on-read');
+
+-- 25 M lignes : sans ordre d'écriture, Iceberg garde un fichier ouvert par partition
+-- et par tâche (fanout) et sature la mémoire. Trié, chaque tâche écrit un fichier à la fois.
+ALTER TABLE lake.silver.deces WRITE ORDERED BY date_deces;
 
 -- Lignes écartées : référence seulement (clé, fichier, ligne), pas de contenu brut
 CREATE TABLE IF NOT EXISTS lake.silver.quarantaine (
