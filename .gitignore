@@ -3,3 +3,6 @@
 .env.*
 # ...sauf les modèles sans secret, qui eux sont versionnés
 !.env.example
+
+# Pilote JDBC de NiFi : binaire à télécharger (voir LISEZMOI.txt), pas à versionner
+bronze-a-la-main/nifi-drivers/*.jar

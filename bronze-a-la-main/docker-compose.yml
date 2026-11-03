@@ -38,10 +38,44 @@ services:
         source: ${DATA_DIR:?Définir DATA_DIR dans le fichier .env}/Hospitalisation
         target: /data/hospitalisation
         read_only: true
+      - type: bind
+        source: ${DATA_DIR}/Etablissement de SANTE
+        target: /data/etablissements
+        read_only: true
+      - ./nifi-drivers:/opt/nifi/drivers:ro
     ports:
       - "127.0.0.1:8443:8443"
+  sftp:
+    image: atmoz/sftp:alpine
+    command: ["${SFTP_USER:?Définir SFTP_USER dans le fichier .env}:${SFTP_PASSWORD:?Définir SFTP_PASSWORD dans le fichier .env}:1001:100"]
+    volumes:
+      - type: bind
+        source: ${DATA_DIR}/DECES EN FRANCE
+        target: /home/${SFTP_USER}/deces
+        read_only: true
+      - type: bind
+        source: ${DATA_DIR}/Satisfaction
+        target: /home/${SFTP_USER}/satisfaction
+        read_only: true
+    ports:
+      - "127.0.0.1:2222:22"
+
+  pg-source:
+    image: postgres:18.6-bookworm
+    environment:
+      POSTGRES_PASSWORD: ${PG_SUPER_PASSWORD:?Définir PG_SUPER_PASSWORD dans le fichier .env}
+      POSTGRES_DB: chu_source
+    volumes:
+      - pg_source_data:/var/lib/postgresql
+      - type: bind
+        source: ${DATA_DIR}/BDD PostgreSQL
+        target: /dump
+        read_only: true
+    ports:
+      - "127.0.0.1:15433:5432"
 
 volumes:
   seaweed_data:
   nifi_conf:
   nifi_state:
+  pg_source_data:
