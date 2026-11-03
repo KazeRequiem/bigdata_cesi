@@ -15,6 +15,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      # comptes créés au premier démarrage (docker/postgres/initdb/02_droits.sh)
+      ETL_USER: ${ETL_USER}
+      ETL_PASSWORD: ${ETL_PASSWORD}
+      BI_USER: ${BI_USER}
+      BI_PASSWORD: ${BI_PASSWORD}
     # mêmes réglages pour toutes les mesures du benchmark
     command: >
       postgres
@@ -47,9 +52,10 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      # Spark utilise le compte etl : catalogue Iceberg + écriture dans staging uniquement
       POSTGRES_HOST: postgres
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${ETL_USER}
+      POSTGRES_PASSWORD: ${ETL_PASSWORD}
       ICEBERG_CATALOG_DB: ${ICEBERG_CATALOG_DB}
       ICEBERG_WAREHOUSE: file:///data/warehouse
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
@@ -59,8 +65,8 @@ services:
       SILVER_NAMESPACE: silver
       SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
       PG_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      PG_USER: ${POSTGRES_USER}
-      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      PG_USER: ${ETL_USER}
+      PG_PASSWORD: ${ETL_PASSWORD}
     command: ["sleep", "infinity"]
     ports:
       - "4040:4040"   # Spark UI pendant un job
@@ -69,6 +75,24 @@ services:
       - ./data/bronze:/data/bronze:ro
       - silver_warehouse:/data/warehouse
 
+  # Interface web d'administration : http://localhost:5050
+  pgadmin:
+    image: dpage/pgadmin4:9.4
+    container_name: chu-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+
 volumes:
   pg_data:
   silver_warehouse:
+  pgadmin_data:
