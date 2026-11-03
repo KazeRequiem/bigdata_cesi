@@ -1,0 +1,15 @@
+#!/bin/bash
+# Lance silver_cli.py avec la configuration Iceberg.
+#   silver ddl | silver run --job all | silver qualite --out ... | silver export --tables all
+set -e
+exec spark-submit \
+  --master "${SPARK_MASTER:-local[*]}" \
+  --driver-memory "${SPARK_DRIVER_MEMORY:-4g}" \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  --conf spark.sql.catalog.lake=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.lake.catalog-impl=org.apache.iceberg.jdbc.JdbcCatalog \
+  --conf "spark.sql.catalog.lake.uri=jdbc:postgresql://${POSTGRES_HOST:-postgres}:5432/${ICEBERG_CATALOG_DB:-iceberg_catalog}" \
+  --conf "spark.sql.catalog.lake.jdbc.user=${POSTGRES_USER}" \
+  --conf "spark.sql.catalog.lake.jdbc.password=${POSTGRES_PASSWORD}" \
+  --conf "spark.sql.catalog.lake.warehouse=${ICEBERG_WAREHOUSE:-file:///data/warehouse}" \
+  /opt/silver/silver_cli.py "$@"
