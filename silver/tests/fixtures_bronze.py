@@ -33,7 +33,7 @@ def manifest(path: str, source: str, sha256: str | None = None) -> None:
 
 def _parquet(spark, root, table, rows, schema):
     spark.createDataFrame(rows, schema).coalesce(1).write.mode("overwrite") \
-        .parquet(f"{root}/s1_postgres/{D}/{table}")
+        .parquet(f"{root}/s1_soins/{D}/{table}")
 
 
 def _xlsx(path, header, rows):
@@ -52,7 +52,7 @@ def build(spark, root: str) -> None:
     import datetime as dt
 
     # ------------------------------------------------------------------ COG
-    _w(f"{root}/cog/{D}/v_commune_2026.csv",
+    _w(f"{root}/s0_cog/{D}/v_commune_2026.csv",
        "TYPECOM,COM,REG,DEP,CTCD,ARR,TNCC,NCC,NCCENR,LIBELLE,CAN,COMPARENT\n"
        "COM,59350,32,59,59D,594,0,LILLE,Lille,Lille,5999,\n"
        "COM,62041,32,62,62D,621,1,ARRAS,Arras,Arras,6299,\n"
@@ -63,15 +63,15 @@ def build(spark, root: str) -> None:
        "COMD,59355,,,,,0,LOMME,Lomme,Lomme,,59350\n"   # -> passage 59355 -> 59350
        "COMD,59350,,,,,0,LILLE,Lille,Lille,,59350\n"   # -> ignoré (même code que la commune)
        "COM,ABCDE,32,59,,,0,X,X,Commune invalide,,\n")  # -> rejet
-    _w(f"{root}/cog/{D}/v_departement_2026.csv",
+    _w(f"{root}/s0_cog/{D}/v_departement_2026.csv",
        "DEP,REG,CHEFLIEU,TNCC,NCC,NCCENR,LIBELLE\n59,32,59350,2,NORD,Nord,Nord\n"
        "62,32,62041,2,PAS DE CALAIS,Pas-de-Calais,Pas-de-Calais\n75,11,75056,0,PARIS,Paris,Paris\n"
        "2A,94,2A004,3,CORSE DU SUD,Corse-du-Sud,Corse-du-Sud\n01,84,01053,5,AIN,Ain,Ain\n")
-    _w(f"{root}/cog/{D}/v_region_2026.csv",
+    _w(f"{root}/s0_cog/{D}/v_region_2026.csv",
        "REG,CHEFLIEU,TNCC,NCC,NCCENR,LIBELLE\n32,59350,4,HAUTS DE FRANCE,Hauts-de-France,Hauts-de-France\n"
        "11,75056,1,ILE DE FRANCE,Île-de-France,Île-de-France\n94,2A004,0,CORSE,Corse,Corse\n"
        "84,69123,1,AUVERGNE RHONE ALPES,Auvergne-Rhône-Alpes,Auvergne-Rhône-Alpes\n")
-    _w(f"{root}/cog/{D}/v_mvt_commune_2026.csv",
+    _w(f"{root}/s0_cog/{D}/v_mvt_commune_2026.csv",
        "MOD,DATE_EFF,TYPECOM_AV,COM_AV,TNCC_AV,NCC_AV,NCCENR_AV,LIBELLE_AV,TYPECOM_AP,COM_AP,TNCC_AP,NCC_AP,NCCENR_AP,LIBELLE_AP\n"
        "31,2019-01-01,COM,62999,0,VIEUX,Vieux,Vieux,COM,62041,1,ARRAS,Arras,Arras\n")  # -> 62999 -> 62041
 

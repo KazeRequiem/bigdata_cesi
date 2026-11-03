@@ -162,8 +162,39 @@ def _file_format(fmt: str, f: str) -> str:
     if fmt != "auto":
         return fmt
     ext = f.lower().rsplit(".", 1)[-1]
-    return {"parquet": "parquet", "csv": "csv", "txt": "csv", "tsv": "csv", "xlsx": "xlsx",
-            "xlsm": "xlsx", "json": "json"}.get(ext, "csv")
+    return {"parquet": "parquet", "avro": "avro", "csv": "csv", "txt": "csv", "tsv": "csv",
+            "xlsx": "xlsx", "xlsm": "xlsx", "json": "json"}.get(ext, "csv")
+
+
+def _avro_time_fields(spark, f: str) -> dict[str, int]:
+    """Champs time-millis / time-micros du schéma Avro -> diviseur vers les secondes.
+    spark-avro ne gère pas ces types logiques : il les lit en simple entier."""
+    import json
+    jvm = spark._jvm
+    src = jvm.org.apache.avro.mapred.FsInput(jvm.org.apache.hadoop.fs.Path(f), spark._jsc.hadoopConfiguration())
+    rd = jvm.org.apache.avro.file.DataFileReader.openReader(src, jvm.org.apache.avro.generic.GenericDatumReader())
+    try:
+        schema = json.loads(rd.getSchema().toString())
+    finally:
+        rd.close()
+    out = {}
+    for fld in schema.get("fields", []):
+        types = fld["type"] if isinstance(fld["type"], list) else [fld["type"]]
+        for t in types:
+            if isinstance(t, dict) and t.get("logicalType") in ("time-millis", "time-micros"):
+                out[fld["name"]] = 1000 if t["logicalType"] == "time-millis" else 1_000_000
+    return out
+
+
+def _read_avro(spark, files: list[str]) -> DataFrame:
+    """Avro NiFi (ExecuteSQL, types logiques activés) : date et timestamp arrivent typés
+    (relus par parse_date), les heures sont remises en texte HH:mm:ss."""
+    df = spark.read.format("avro").load(files)
+    for name, div in _avro_time_fields(spark, files[0]).items():
+        s = F.floor(F.col(f"`{name}`") / div)
+        hms = F.format_string("%02d:%02d:%02d", F.floor(s / 3600), F.floor(s / 60) % 60, s % 60)
+        df = df.withColumn(name, F.when(s.isNotNull(), hms))
+    return df
 
 
 def read_bronze(spark: SparkSession, settings: Settings, source: str,
@@ -195,17 +226,19 @@ def read_bronze(spark: SparkSession, settings: Settings, source: str,
                 _check_manifest(spark, f, f + MANIFEST_SUFFIX)
 
     fmt, enc = cfg.get("format", "auto"), cfg.get("encoding", "UTF-8")
-    parquet = [f for f in files if _file_format(fmt, f) == "parquet"]
+    # Formats avec schéma (Parquet, Avro) : lus en une fois.
     parts = []
-    if parquet:
-        df = spark.read.parquet(*parquet)
-        parts.append(apply_mapping(_with_lineage(df, F.input_file_name()), cfg["columns"]))
+    for kind in ("parquet", "avro"):
+        batch = [f for f in files if _file_format(fmt, f) == kind]
+        if batch:
+            df = spark.read.parquet(*batch) if kind == "parquet" else _read_avro(spark, batch)
+            parts.append(apply_mapping(_with_lineage(df, F.input_file_name()), cfg["columns"]))
 
     # Fichiers plats : lus un par un (séparateur et colonnes peuvent changer
     # d'une année à l'autre, ex. e-Satis), puis réunis après correspondance.
     for f in files:
         kind = _file_format(fmt, f)
-        if kind == "parquet":
+        if kind in ("parquet", "avro"):
             continue
         if kind == "xlsx":
             df = _read_xlsx(spark, f)
@@ -261,8 +294,11 @@ def parse_date(c, formats: list[str] | None = None) -> Column:
     donnés, seuls eux (+ ISO) sont essayés : un 4/6/1980 américain ne doit pas
     être relu en jour/mois par un format de repli."""
     c = clean(c)
-    fmts = (formats + ["yyyy-MM-dd"]) if formats else _DATE_FORMATS
-    return F.coalesce(*[F.to_date(F.try_to_timestamp(c, F.lit(f))) for f in fmts])
+    # Date ou timestamp déjà typé (Avro, Parquet) : relu en texte ISO "2015-01-01[ 00:00:00]"
+    iso = F.when(c.rlike(r"^\d{4}-\d{2}-\d{2}([ T]|$)"),
+                 F.to_date(F.try_to_timestamp(F.substring(c, 1, 10), F.lit("yyyy-MM-dd"))))
+    fmts = formats or _DATE_FORMATS
+    return F.coalesce(iso, *[F.to_date(F.try_to_timestamp(c, F.lit(f))) for f in fmts])
 
 
 def date_formats(source: str) -> list[str] | None:
