@@ -1,3 +1,11 @@
+# Secrets locaux : jamais dans Git (valable pour tout le dépôt, dans tous les dossiers)
+.env
+.env.*
+# ...sauf les modèles sans secret, qui eux sont versionnés
+!.env.example
+
+# Pilote JDBC de NiFi : binaire à télécharger (voir LISEZMOI.txt), pas à versionner
+bronze/nifi-drivers/*.jar
 __pycache__/
 *.pyc
 .pytest_cache/

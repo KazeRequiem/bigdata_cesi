@@ -1,0 +1,299 @@
+=============================================================================
+ COUCHE BRONZE : SeaweedFS (stockage) + Apache NiFi (ingestion)
+ Projet Cloud Healthcare Unit - CESI A4 FISA - bloc Big Data
+=============================================================================
+
+1. CE QUE FAIT CE DOSSIER
+-------------------------
+Il lance quatre conteneurs Docker :
+
+  - seaweedfs : un stockage de fichiers compatible Amazon S3. Le "bucket"
+    (dossier racine) "bronze" est la couche Bronze : la copie brute et fidèle
+    des sources.
+  - nifi      : l'outil qui lit les sources et les dépose dans Bronze.
+  - sftp      : un serveur SFTP qui simule le "FTP" du sujet (satisfaction et
+    décès), en lecture seule.
+  - pg-source : la base PostgreSQL de soins (source 1), restaurée depuis la
+    sauvegarde DATA2023.
+
+Pour chaque fichier ou table reçu, NiFi dépose dans Bronze :
+  - une copie fidèle, rangée par source et par date de réception ;
+  - un manifeste JSON à côté, avec le nom, la date d'envoi et l'empreinte
+    SHA-256 du contenu (preuve qu'il n'a pas été modifié).
+
+Les cinq sources branchées :
+
+  Source                          Origine                  Dossier Bronze
+  ------------------------------  -----------------------  -------------------
+  S1  base de soins (13 tables)   PostgreSQL (pg-source)   s1_soins/<date>/*.avro
+  S1b hospitalisations (CSV)      dossier du PC            s1_hospitalisations/<date>/
+  S2  établissements (3 CSV)      dossier du PC            s2_etablissements/<date>/
+  S3  satisfaction (42 fichiers)  serveur SFTP /satisfaction  s3_satisfaction/<date>/<sous-dossier>/
+  S4  décès (1 CSV de 2 Go)       serveur SFTP /deces      s4_deces/<date>/
+
+Les tables de la base sont écrites au format Avro (un fichier par table) : le
+format Parquet n'existe pas dans cette version de NiFi.
+
+
+2. CE QU'IL FAUT AVANT DE COMMENCER
+-----------------------------------
+  - Docker Desktop installé et LANCÉ (Docker Compose v2.23 ou plus récent).
+  - Environ 6 Go de mémoire libre pour Docker et 15 Go de disque.
+  - Le dossier de données du projet ("DATA 2024") copié sur ton PC, avec ses
+    sous-dossiers : "BDD PostgreSQL", "DECES EN FRANCE",
+    "Etablissement de SANTE", "Hospitalisation", "Satisfaction".
+  - Un terminal : l'invite de commandes Windows (cmd) ou Git Bash.
+
+
+3. PREMIER LANCEMENT (une seule fois)
+-------------------------------------
+Toutes les commandes se tapent dans ce dossier (bronze).
+
+  Étape 1 - Créer ton fichier de configuration
+      cmd :       copy .env.example .env
+      Git Bash :  cp .env.example .env
+    Ouvre ".env" avec le Bloc-notes et remplace les valeurs (enregistre !).
+    Aucun espace autour du "=". Le fichier s'appelle bien ".env" (pas ".env.txt").
+      S3_ACCESS_KEY / S3_SECRET_KEY : clés d'accès au stockage (au choix)
+      NIFI_USER / NIFI_PASSWORD     : compte NiFi (12 caractères minimum)
+      DATA_DIR                      : dossier des données, avec des "/"
+                                      (ex. C:/Users/toi/Downloads/DATA 2024)
+      SFTP_USER / SFTP_PASSWORD     : compte du serveur SFTP (au choix)
+      PG_SUPER_PASSWORD             : administrateur de la base de soins
+      PG_SOURCE_READER_PASSWORD     : compte en lecture seule "etl_reader"
+    Le fichier .env n'est JAMAIS commité (il est dans .gitignore).
+
+  Étape 2 - Télécharger le pilote JDBC de PostgreSQL (1 Mo)
+    NiFi a besoin d'un pilote pour parler à PostgreSQL. Il n'est pas dans Git.
+      cmd :  mkdir nifi-drivers   (s'il n'existe pas déjà)
+             curl -L -o nifi-drivers\postgresql-42.7.7.jar https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.7/postgresql-42.7.7.jar
+    Contrôle : le fichier fait 1 098 916 octets.
+
+  Étape 3 - Démarrer les quatre conteneurs
+      docker compose up -d
+    La première fois, Docker télécharge les images (environ 4 Go).
+    Vérifier : docker compose ps   ->  quatre services "Up".
+
+  Étape 4 - Créer le bucket "bronze" (une seule fois, les données restent)
+      cmd :       docker compose exec -T seaweedfs sh -c "echo s3.bucket.create -name bronze | weed shell"
+      Git Bash :  docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.create -name bronze" | weed shell'
+    Résultat attendu : "created bucket bronze".
+    Contrôle : http://localhost:8888/buckets/  montre un dossier "bronze".
+
+  Étape 5 - Restaurer la base de soins (une seule fois, 10 secondes)
+      docker compose exec -T pg-source pg_restore --username postgres --dbname chu_source --no-owner --no-privileges /dump/DATA2023
+    Deux erreurs sur "adminpack" et "errors ignored on restore: 2" sont
+    ATTENDUES et sans conséquence.
+    Puis créer le compte en lecture seule (le mot de passe doit être celui de
+    PG_SOURCE_READER_PASSWORD) :
+      docker compose exec -T pg-source psql -U postgres -d chu_source -c "CREATE ROLE etl_reader LOGIN PASSWORD 'ton-mot-de-passe'; GRANT CONNECT ON DATABASE chu_source TO etl_reader; GRANT USAGE ON SCHEMA public TO etl_reader; GRANT SELECT ON ALL TABLES IN SCHEMA public TO etl_reader; ALTER ROLE etl_reader SET default_transaction_read_only = on;"
+    Contrôle (doit afficher 1027157) :
+      docker compose exec -T pg-source psql -U postgres -d chu_source -c "SELECT count(*) FROM \"Consultation\";"
+
+  Étape 6 - Ouvrir NiFi (attendre environ 30 secondes après le démarrage)
+      https://localhost:8443/nifi      (bien écrire https)
+    Le navigateur affiche "Votre connexion n'est pas privée" : c'est normal, NiFi
+    fabrique lui-même son certificat. Clique sur "Paramètres avancés" puis
+    "Continuer vers localhost". Si le bouton manque : clique dans la page et
+    tape au clavier : thisisunsafe
+    Connexion : NIFI_USER et NIFI_PASSWORD de ton fichier .env.
+
+  Étape 7 - Mettre en place les flux : importer les fichiers du dossier nifi/
+    (section 4), ou les dessiner soi-même (section 5).
+
+
+4. IMPORTER LES FLUX NIFI (le plus rapide)
+------------------------------------------
+Les flux sont versionnés sous forme de fichiers JSON dans le dossier nifi/ :
+un fichier par source (bronze_s1_soins.json, bronze_s1_hospitalisations.json,
+bronze_s2_etablissements.json, bronze_s3_satisfaction.json, bronze_s4_deces.json).
+
+  A. Créer les deux services partagés (une fois, à la racine du canevas)
+     Clic droit sur une zone vide > Controller Services > bouton "+".
+
+     1) AWSCredentialsProviderControllerService  (les clés du stockage)
+          Access Key ID     = S3_ACCESS_KEY du .env
+          Secret Access Key = S3_SECRET_KEY du .env
+        puis l'activer (éclair > Enable > "Service only").
+
+     2) DBCPConnectionPool  (la connexion à la base de soins)
+          Database Connection URL      = jdbc:postgresql://pg-source:5432/chu_source
+          Database Driver Class Name   = org.postgresql.Driver
+          Database Driver Location(s)  = /opt/nifi/drivers/postgresql-42.7.7.jar
+          Database User                = etl_reader
+          Password                     = PG_SOURCE_READER_PASSWORD du .env
+        puis l'activer.
+
+  B. Importer chaque flux
+     Glisser l'icône "Process Group" sur le canevas, cliquer sur l'icône de
+     parcours de fichier à côté du nom, choisir le .json, puis "Add".
+
+  C. Ce que l'import NE contient PAS (NiFi retire les secrets de l'export)
+     - les clés S3 et le mot de passe de la base : voir A ;
+     - les mots de passe SFTP : dans les groupes S3 et S4, ouvrir ListSFTP et
+       FetchSFTP, propriété Password = SFTP_PASSWORD du .env ;
+     - le lien vers les services : dans chaque PutS3Object (il y en a deux par
+       groupe), propriété "AWS Credentials Provider Service" = le service du A.1 ;
+       dans le groupe S1 soins, ListDatabaseTables et ExecuteSQL, propriété
+       "Database Connection Pooling Service" = le service du A.2.
+     Les blocs invalides (triangle jaune) indiquent ce qui reste à régler :
+     survoler le triangle donne la raison.
+
+  D. Démarrer : dans un groupe, Ctrl+A sur le canevas, clic droit > Start.
+     Démarrer les groupes un par un (le fichier des décès pèse 2 Go).
+
+
+5. LES FLUX NIFI (la recette, pour les redessiner soi-même)
+-------------------------------------------------------------
+Chaque flux est une chaîne de blocs reliés par des flèches "success". La fin
+est la même pour les cinq :
+
+  ... -> CryptographicHashContent -> UpdateAttribute -> PutS3Object
+      -> AttributesToJSON -> PutS3Object - manifeste
+
+  Début du flux selon la source :
+
+  Fichiers du PC (S1b, S2) :  ListFile -> FetchFile
+      ListFile  : Input Directory = /data/hospitalisation  (ou /data/etablissements)
+      FetchFile : réglages par défaut ; terminer failure, not.found,
+                  permission.denied
+
+  Serveur SFTP (S3, S4) :  ListSFTP -> FetchSFTP
+      ListSFTP  : Hostname = sftp, Port = 22, Username = SFTP_USER,
+                  Password = SFTP_PASSWORD,
+                  Remote Path = /satisfaction (S3) ou /deces (S4),
+                  Search Recursively = true (S3) ou false (S4),
+                  File Filter Regex = (?!~\$).+   (ignore les fichiers verrou
+                  "~$..." qu'Excel laisse dans le dossier des données)
+      FetchSFTP : Hostname = sftp, Port = 22, Username, Password,
+                  Remote File = ${path}/${filename} ;
+                  terminer comms.failure, not.found, permission.denied
+
+  Base de soins (S1) :  ListDatabaseTables -> ExecuteSQL
+      ListDatabaseTables : Database Connection Pooling Service = le DBCP ;
+                           Include Count = false ; Refresh Interval = 0 sec
+      ExecuteSQL         : Database Connection Pooling Service = le DBCP ;
+                           SQL Query = SELECT * FROM public."${db.table.name}"
+                           (les guillemets doubles sont obligatoires : les
+                           noms de tables ont des majuscules) ;
+                           Use Avro Logical Types = true ; terminer failure
+      (pas de FetchFile : ExecuteSQL est relié directement à
+       CryptographicHashContent)
+
+  UpdateAttribute (bouton "+" pour ajouter chaque propriété) :
+      source      = nom de la source (s1_soins, s1_hospitalisations,
+                    s2_etablissements, s3_satisfaction, s4_deces)
+      ingest.date = ${now():format('yyyy-MM-dd')}
+      bronze.key  = <source>/${now():format('yyyy-MM-dd')}/${filename}
+        - S3 : s3_satisfaction/${now():format('yyyy-MM-dd')}${path:substringAfter('satisfaction')}/${filename}
+          (garde les sous-dossiers 2014, 2015, ...)
+        - S1 : s1_soins/${now():format('yyyy-MM-dd')}/${db.table.name}.avro
+          et une propriété filename = ${db.table.name}.avro
+
+  CryptographicHashContent : Hash Algorithm = SHA-256 ; terminer failure
+
+  PutS3Object (le fichier) :
+      Bucket = bronze ; Object Key = ${bronze.key}
+      Region = n'importe laquelle (SeaweedFS l'ignore)
+      Endpoint Override URL = http://seaweedfs:8333
+      Use Path Style Access = true
+      AWS Credentials Provider Service = le service du A.1
+      terminer failure uniquement (success va au bloc suivant)
+
+  AttributesToJSON :
+      Attributes List = source,bronze.key,filename,file.size,file.lastModifiedTime,content_SHA-256,ingest.date
+      Destination = flowfile-content ; Include Core Attributes = false ;
+      Pretty Print = true ; terminer failure
+
+  PutS3Object - manifeste (copie du PutS3Object) :
+      Object Key = ${bronze.key}.manifest.json ; Content Type = application/json ;
+      terminer success ET failure
+
+  Pour renvoyer un fichier déjà vu : clic droit sur ListFile / ListSFTP /
+  ListDatabaseTables > View state > Clear state (le flux doit être arrêté).
+
+  Piège : en copiant un groupe, NiFi NE copie PAS les secrets (mots de passe,
+  clés) : les ressaisir dans le groupe copié.
+
+
+6. VÉRIFIER QUE ÇA MARCHE
+-------------------------
+  - Explorateur de fichiers : http://localhost:8888/buckets/bronze/
+  - Le manifeste d'un fichier :
+      http://localhost:8888/buckets/bronze/s1_hospitalisations/<date>/Hospitalisations.csv.manifest.json
+  - L'empreinte du fichier d'origine, à comparer avec "content_SHA-256" :
+      cmd :  certutil -hashfile "<DATA_DIR>\Hospitalisation\Hospitalisations.csv" SHA256
+  - Dans NiFi : clic droit sur un bloc > View data provenance > menu "..." d'une
+    ligne SEND > View Details > onglet Attributes.
+  - Résultat attendu : s1_soins/<date>/ contient 13 .avro et 13 manifestes ;
+    s4_deces/<date>/deces.csv fait 1 999 899 438 octets.
+
+
+7. AU QUOTIDIEN
+---------------
+  Démarrer             docker compose up -d
+  Arrêter (sans perte) docker compose stop        ou        docker compose down
+  État                 docker compose ps
+  Journaux             docker compose logs -f nifi        (Ctrl+C pour quitter)
+
+  Les fichiers de Bronze, la base de soins et les flux NiFi sont conservés dans
+  des "volumes" Docker : ils survivent à "stop" et à "down".
+
+  !!! JAMAIS : docker compose down -v      (supprime les volumes : Bronze, la
+                                            base de soins et les flux NiFi)
+  !!! JAMAIS : docker volume prune         (même effet, sur tous les projets)
+
+
+8. DÉPANNAGE
+------------
+  "port is already allocated" au démarrage
+      Un autre programme utilise le port (8443, 8333, 8888, 2222 ou 15433).
+
+  "variable is missing" / "Définir ... dans le fichier .env"
+      Le fichier .env n'existe pas, une ligne manque, ou il n'est pas enregistré.
+
+  "refers to undefined volume" / "did not find expected key"
+      Erreur d'indentation dans docker-compose.yml : chaque service commence
+      par 2 espaces, ses clés par 4, ses listes par 6.
+
+  NiFi ne répond pas / NiFi refuse de démarrer
+      Attendre 30 s de plus ; vérifier "https" ; NIFI_PASSWORD fait moins de
+      12 caractères.
+
+  Bloc avec un carré rouge "!"
+      Passer la souris dessus pour lire le message. Cas fréquents :
+      "SSH Authentication failed" (mot de passe SFTP vide dans un groupe copié),
+      clés S3 absentes, "Use Path Style Access" pas à true.
+
+  Bloc avec un triangle jaune
+      Il est invalide : survoler le triangle (issue non reliée, service
+      désactivé ou non choisi).
+
+  Un fichier n'est pas renvoyé à un deuxième passage
+      Normal : les blocs "List..." se souviennent de ce qu'ils ont vu.
+      View state > Clear state (flux arrêté).
+
+  Des données sont arrivées au mauvais endroit dans Bronze
+      Vérifier UpdateAttribute (source et bronze.key) AVANT de démarrer un
+      groupe copié.
+
+
+9. CE QUI EST DANS GIT, ET CE QUI NE L'EST PAS
+----------------------------------------------
+  Dans Git :
+    docker-compose.yml   les quatre conteneurs
+    .env.example         le modèle de configuration (sans secret)
+    .gitignore           exclut .env et le pilote .jar
+    nifi/*.json          les flux NiFi (sans secrets)
+    nifi-drivers/.gitkeep  garde le dossier du pilote
+    LISEZMOI.txt         ce document
+
+  Hors de Git :
+    .env                 les secrets de chaque personne
+    nifi-drivers/*.jar   le pilote JDBC (à télécharger, étape 2)
+    les données          volumes Docker (seaweed_data, pg_source_data)
+    la configuration NiFi  volume Docker "nifi_conf" (utiliser les JSON)
+
+  À faire plus tard : un script qui importe les flux et branche les services
+  tout seul (via l'API de NiFi), et le branchement de Bronze au pipeline
+  Silver/Gold du Livrable 2 (lecture des fichiers Avro).
