@@ -23,8 +23,8 @@ CREATE INDEX ix_satisf_date ON gold.fait_satisfaction (sk_date);  -- B8
 CREATE INDEX ix_deces_geo ON gold.fait_deces (sk_geo_deces);      -- B7
 
 -- dimensions
+-- (id_organisation, date_debut_validite) est déjà indexé par uq_etab_version
 CREATE INDEX ix_geo_region       ON gold.dim_geographie (code_region);                           -- B7, B8
-CREATE INDEX ix_etab_finess      ON gold.dim_etablissement (finess_site, date_debut_validite);   -- B1
+CREATE INDEX ix_etab_finess      ON gold.dim_etablissement (finess_site, date_debut_validite);   -- rattachement e-Satis
 CREATE INDEX ix_etab_geo         ON gold.dim_etablissement (sk_geo);                             -- B8
-CREATE INDEX ix_patient_geo      ON gold.dim_patient (sk_geo);
 CREATE INDEX ix_temps_annee_mois ON gold.dim_temps (annee, mois);                                -- B8

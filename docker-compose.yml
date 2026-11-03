@@ -1,0 +1,126 @@
+# Stack Silver + Gold.
+#   cp .env.example .env
+#   docker compose up -d --build
+
+name: chu-lakehouse
+
+services:
+
+  # Gold (chu_dw) + catalogue Iceberg (iceberg_catalog)
+  postgres:
+    image: postgres:18
+    container_name: chu-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # comptes créés au premier démarrage (docker/postgres/initdb/02_droits.sh)
+      ETL_USER: ${ETL_USER}
+      ETL_PASSWORD: ${ETL_PASSWORD}
+      BI_USER: ${BI_USER}
+      BI_PASSWORD: ${BI_PASSWORD}
+    # mêmes réglages pour toutes les mesures du benchmark
+    command: >
+      postgres
+      -c shared_buffers=1GB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+      -c effective_cache_size=3GB
+      -c max_parallel_workers_per_gather=2
+      -c random_page_cost=1.1
+    shm_size: 1gb
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql          # PostgreSQL 18 : plus /var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+      - ./sql:/sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # Spark 3.5 + Iceberg : jobs Silver et export vers staging
+  spark:
+    build: ./docker/spark
+    image: chu-spark:3.5
+    container_name: chu-spark
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Spark utilise le compte etl : catalogue Iceberg + écriture dans staging uniquement
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${ETL_USER}
+      POSTGRES_PASSWORD: ${ETL_PASSWORD}
+      ICEBERG_CATALOG_DB: ${ICEBERG_CATALOG_DB}
+      ICEBERG_WAREHOUSE: file:///data/warehouse
+      SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
+      BRONZE_ROOT: /data/bronze               # en attendant SeaweedFS : s3a://bronze
+      SILVER_STORAGE: iceberg
+      SILVER_CATALOG: lake
+      SILVER_NAMESPACE: silver
+      SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
+      PG_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      PG_USER: ${ETL_USER}
+      PG_PASSWORD: ${ETL_PASSWORD}
+    command: ["sleep", "infinity"]
+    ports:
+      - "4040:4040"   # Spark UI pendant un job
+    volumes:
+      - ./silver:/opt/silver
+      - ./data/bronze:/data/bronze:ro
+      - silver_warehouse:/data/warehouse
+
+  # Interface web d'administration : http://localhost:5050
+  pgadmin:
+    image: dpage/pgadmin4:9.4
+    container_name: chu-pgadmin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+
+  # Tableaux de bord (Livrable 3) : http://localhost:8088
+  superset:
+    build: ./docker/superset
+    image: chu-superset:4.1
+    container_name: chu-superset
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUPERSET_CONFIG_PATH: /app/superset_config_chu.py
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL}
+      # base de métadonnées "superset" (compte administrateur)
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # source de données : couche Gold, compte bi en lecture seule
+      POSTGRES_DB: ${POSTGRES_DB}
+      BI_USER: ${BI_USER}
+      BI_PASSWORD: ${BI_PASSWORD}
+    command: ["/app/init_chu.sh"]
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./docker/superset/superset_config.py:/app/superset_config_chu.py:ro
+
+volumes:
+  pg_data:
+  silver_warehouse:
+  pgadmin_data:

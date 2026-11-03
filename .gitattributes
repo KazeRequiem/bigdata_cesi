@@ -1,0 +1,3 @@
+# Scripts exécutés sous Linux (conteneurs) : fins de ligne LF même sous Windows
+*.sh text eol=lf
+docker/spark/silver text eol=lf
