@@ -50,33 +50,33 @@ class Settings:
 SOURCES: dict[str, dict] = {
     # ---- Fichier COG INSEE (5e source, référentiel, à télécharger sur insee.fr) ----
     "cog_communes": {
-        "path": "cog", "include": r"(?i)(^|/)v_commune_\d{4}\.csv$",
+        "path": "s0_cog", "include": r"(?i)(^|/)v_commune_\d{4}\.csv$",
         "columns": {
             "typecom": ["TYPECOM"], "com": ["COM"], "reg": ["REG"], "dep": ["DEP"],
             "libelle": ["LIBELLE"], "comparent": ["COMPARENT"],
         },
     },
     "cog_departements": {
-        "path": "cog", "include": r"(?i)(^|/)v_departement_\d{4}\.csv$",
+        "path": "s0_cog", "include": r"(?i)(^|/)v_departement_\d{4}\.csv$",
         "columns": {"dep": ["DEP"], "reg": ["REG"], "libelle": ["LIBELLE"]},
     },
     "cog_regions": {
-        "path": "cog", "include": r"(?i)(^|/)v_region_\d{4}\.csv$",
+        "path": "s0_cog", "include": r"(?i)(^|/)v_region_\d{4}\.csv$",
         "columns": {"reg": ["REG"], "libelle": ["LIBELLE"]},
     },
     # Facultatif : mouvements de communes (fusions), pour recoder les anciens codes
     "cog_mouvements": {
-        "path": "cog", "include": r"(?i)(^|/)v_mvt_commune_\d{4}\.csv$", "optional": True,
+        "path": "s0_cog", "include": r"(?i)(^|/)v_mvt_commune_\d{4}\.csv$", "optional": True,
         "columns": {"com_av": ["COM_AV"], "com_ap": ["COM_AP"], "date_eff": ["DATE_EFF"],
                     "typecom_ap": ["TYPECOM_AP"]},
     },
 
     # ---- Source 1 : base PostgreSQL (dump DATA2023), extraite par NiFi ----
     # Une table = un fichier (ou un dossier) dont le nom commence par le nom de la
-    # table : s1_postgres/2026-11-02/patient.parquet, .../Consultation.csv, etc.
-    # Format déduit de l'extension (Parquet ou CSV ; Avro : ajouter spark-avro).
+    # table : s1_soins/2026-11-02/Patient.avro, .../Consultation.avro (sortie NiFi).
+    # Format déduit de l'extension (Avro, Parquet ou CSV).
     "s1_patient": {
-        "path": "s1_postgres", "include": r"(?i)(^|/)patient([./_-]|$)",
+        "path": "s1_soins", "include": r"(?i)(^|/)patient([./_-]|$)",
         # Colonne "Date" de la table Patient au format américain : 4/6/1980, 7/25/2013
         "date_formats": ["M/d/yyyy"],
         "columns": {
@@ -87,7 +87,7 @@ SOURCES: dict[str, dict] = {
         },
     },
     "s1_professionnel": {
-        "path": "s1_postgres", "include": r"(?i)(^|/)professionnel_de_sante([./_-]|$)",
+        "path": "s1_soins", "include": r"(?i)(^|/)professionnel_de_sante([./_-]|$)",
         "columns": {
             "identifiant": ["identifiant"],         # RPPS (11) ou ADELI (8-9)
             "type_identifiant": ["type_identifiant"],
@@ -98,16 +98,16 @@ SOURCES: dict[str, dict] = {
         },
     },
     "s1_specialites": {
-        "path": "s1_postgres", "include": r"(?i)(^|/)specialites([./_-]|$)",
+        "path": "s1_soins", "include": r"(?i)(^|/)specialites([./_-]|$)",
         "columns": {"code_specialite": ["code_specialite"], "fonction": ["fonction"],
                     "libelle_specialite": ["specialite"]},
     },
     "s1_diagnostic": {
-        "path": "s1_postgres", "include": r"(?i)(^|/)diagnostic([./_-]|$)",
+        "path": "s1_soins", "include": r"(?i)(^|/)diagnostic([./_-]|$)",
         "columns": {"code_diag": ["code_diag"], "libelle": ["diagnostic"]},
     },
     "s1_consultation": {
-        "path": "s1_postgres", "include": r"(?i)(^|/)consultation([./_-]|$)",
+        "path": "s1_soins", "include": r"(?i)(^|/)consultation([./_-]|$)",
         "columns": {
             "id_consultation": ["num_consultation"],
             "id_patient": ["id_patient"],
@@ -120,7 +120,7 @@ SOURCES: dict[str, dict] = {
         },
     },
     "s1_prescription": {
-        "path": "s1_postgres", "include": r"(?i)(^|/)prescription([./_-]|$)", "optional": True,
+        "path": "s1_soins", "include": r"(?i)(^|/)prescription([./_-]|$)", "optional": True,
         "columns": {"id_consultation": ["num_consultation"]},
     },
 

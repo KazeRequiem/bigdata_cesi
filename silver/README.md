@@ -58,13 +58,13 @@ par leur nom (`include` dans `config.py`). Le format est déduit de l'extension.
 | `s2_etablissements` | `etablissement_sante.csv`, `activite_professionnel_sante.csv` | prévu |
 | `s3_satisfaction` | dossier `Satisfaction/` tel quel (seuls les fichiers e-Satis sont lus) | prévu |
 | `s4_deces` | `deces.csv` | prévu |
-| `s1_postgres` | une table par fichier ou dossier : `patient`, `consultation`, `diagnostic`, `professionnel_de_sante`, `specialites`, `prescription` (`.parquet` ou `.csv`) | prévu |
-| `cog` | `v_commune_AAAA.csv`, `v_departement_AAAA.csv`, `v_region_AAAA.csv`, `v_mvt_commune_AAAA.csv` (insee.fr) | à ajouter |
+| `s1_soins` | une table par fichier : `Patient`, `Consultation`, `Diagnostic`, `Professionnel_de_sante`, `Specialites`, `Prescription` (`.avro` NiFi ; `.parquet` ou `.csv` acceptés) | prévu |
+| `s0_cog` | `v_commune_AAAA.csv`, `v_departement_AAAA.csv`, `v_region_AAAA.csv`, `v_mvt_commune_AAAA.csv` (insee.fr) | flux NiFi `bronze_s0_cog` |
 
 Si le Bronze choisit d'autres noms de dossiers, il suffit de changer `path` dans
-`src/silver/config.py`. Pour la base PostgreSQL, NiFi (ExecuteSQL) produit de
-l'Avro par défaut : préférer une sortie Parquet ou CSV, ou ajouter le paquet
-`spark-avro` à spark-submit.
+`src/silver/config.py`. La base PostgreSQL arrive en Avro (NiFi ExecuteSQL, types
+logiques activés) : l'image Spark doit contenir `spark-avro`. Les colonnes `date`
+arrivent typées, les colonnes `time` sont remises en texte `HH:mm:ss` à la lecture.
 
 `professionnel_sante.csv` n'est pas utilisé : la table `Professionnel_de_sante`
 du dump contient les mêmes identifiants et se relie à `Specialites`.
