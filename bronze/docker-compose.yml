@@ -85,8 +85,13 @@ services:
     ports:
       - "127.0.0.1:15433:5432"
 
+# Noms figés : mêmes volumes que l'on lance depuis bronze/ ou depuis la racine (projet chu-lakehouse).
 volumes:
   seaweed_data:
+    name: bronze_seaweed_data
   nifi_conf:
+    name: bronze_nifi_conf
   nifi_state:
+    name: bronze_nifi_state
   pg_source_data:
+    name: bronze_pg_source_data
