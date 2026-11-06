@@ -33,6 +33,10 @@ Au démarrage, `openbao-init` y range la clé de pseudonymisation, les clés S3 
 le lanceur `silver` les lit dans le coffre à chaque job : le conteneur `spark` ne reçoit plus aucun secret
 dans son environnement. Détails, limites et commandes : `docker/openbao/README.md`.
 
+Airflow (orchestration) : http://localhost:8080 (`AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD`). Le DAG `chu_pipeline`
+attend les manifestes Bronze puis enchaîne Silver, export, chargement Gold et rapport de qualité, avec reprises et
+alerte : voir `docker/airflow/README.md`. Il remplace les commandes manuelles de la section « Puis Silver » ci-dessous.
+
 Vérifications :
 
 ```bash
