@@ -47,6 +47,59 @@ services:
       timeout: 5s
       retries: 30
 
+  # Coffre de secrets (OpenBao, mode développement) : http://localhost:8200
+  # Les secrets du .env y sont rangés au démarrage par openbao-init ; Silver les lit au lancement d'un job.
+  # Mode développement = coffre EN MÉMOIRE : après un redémarrage d'openbao seul, relancer
+  #   docker compose up -d --force-recreate openbao-init
+  openbao:
+    image: openbao/openbao:2.7.2
+    container_name: chu-openbao
+    restart: unless-stopped
+    cap_add: [IPC_LOCK]
+    # -config : journal d'audit déclaratif (cette version d'OpenBao refuse de l'activer par commande)
+    command: ["server", "-dev", "-config=/etc/bao/audit.hcl"]
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${OPENBAO_ROOT_TOKEN}
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    volumes:
+      - ./docker/openbao/audit.hcl:/etc/bao/audit.hcl:ro
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Range les secrets dans le coffre, active le journal d'audit, crée le jeton de lecture de Silver (puis s'arrête)
+  openbao-init:
+    image: openbao/openbao:2.7.2
+    container_name: chu-openbao-init
+    restart: "no"
+    user: "0:0"        # doit pouvoir écrire dans le volume bao_tokens (créé par root)
+    depends_on:
+      openbao:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${OPENBAO_ROOT_TOKEN}
+      SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      ETL_USER: ${ETL_USER}
+      ETL_PASSWORD: ${ETL_PASSWORD}
+      BI_USER: ${BI_USER}
+      BI_PASSWORD: ${BI_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # facultatif : rangés dans le coffre s'ils sont définis dans le .env racine
+      SFTP_USER: ${SFTP_USER:-}
+      SFTP_PASSWORD: ${SFTP_PASSWORD:-}
+    volumes:
+      - ./docker/openbao/init.sh:/init/init.sh:ro
+      - bao_tokens:/tokens
+
   # Spark 3.5 + Iceberg : jobs Silver et export vers staging
   spark:
     build: ./docker/spark
@@ -58,26 +111,26 @@ services:
         condition: service_healthy
       seaweedfs:
         condition: service_started
+      openbao-init:
+        condition: service_completed_successfully
     environment:
-      # Spark utilise le compte etl : catalogue Iceberg + écriture dans staging uniquement
+      # Aucun secret ici : la clé de pseudonymisation, les clés S3 et le compte etl (catalogue Iceberg + écriture
+      # dans staging uniquement) sont lus dans OpenBao par le lanceur `silver` (docker/spark/bao-secrets.py).
+      BAO_ADDR: http://openbao:8200
       POSTGRES_HOST: postgres
-      POSTGRES_USER: ${ETL_USER}
-      POSTGRES_PASSWORD: ${ETL_PASSWORD}
       ICEBERG_CATALOG_DB: ${ICEBERG_CATALOG_DB}
       ICEBERG_WAREHOUSE: file:///data/warehouse
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
+      # cœurs utilisés par Spark en local : local[*] = tous les cœurs de la machine (16 ici), soit 16 processus Python en
+      # plus du tas JVM, ce qui dépasse la mémoire de Docker sur les gros jobs (deces) ; 4 suffisent
+      SPARK_MASTER: ${SPARK_MASTER:-local[4]}
       # Bronze dans SeaweedFS ; BRONZE_ROOT=/data/bronze dans le .env pour lire ./data/bronze
       BRONZE_ROOT: ${BRONZE_ROOT:-s3a://bronze}
       S3_ENDPOINT: http://seaweedfs:8333
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
       SILVER_STORAGE: iceberg
       SILVER_CATALOG: lake
       SILVER_NAMESPACE: silver
-      SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
       PG_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      PG_USER: ${ETL_USER}
-      PG_PASSWORD: ${ETL_PASSWORD}
     command: ["sleep", "infinity"]
     ports:
       - "4040:4040"   # Spark UI pendant un job
@@ -85,6 +138,85 @@ services:
       - ./silver:/opt/silver
       - ./data/bronze:/data/bronze:ro
       - silver_warehouse:/data/warehouse
+      - bao_tokens:/run/bao:ro      # jeton de lecture de Silver, créé par openbao-init
+
+  # Orchestration (Airflow 3, LocalExecutor) : http://localhost:8080 -> DAG chu_pipeline (Silver -> Gold -> qualité)
+  # Les tâches pilotent chu-spark et chu-postgres par "docker exec" (socket Docker monté dans airflow-scheduler uniquement).
+  # Airflow ne détient aucun secret du projet : Silver lit les siens dans OpenBao, psql passe par le socket local du conteneur.
+  airflow-init:
+    build: ./docker/airflow
+    image: chu-airflow:3.3.2
+    container_name: chu-airflow-init
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["python", "/init/init.py"]
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__API__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${AIRFLOW_ADMIN_USER:-admin}:admin
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/state/passwords.json
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      BRONZE_FILER_URL: http://seaweedfs:8888
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+    volumes:
+      - ./docker/airflow/init.py:/init/init.py:ro
+      - airflow_state:/opt/airflow/state
+
+  airflow-apiserver:
+    image: chu-airflow:3.3.2
+    container_name: chu-airflow-apiserver
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: ["api-server"]
+    environment: *airflow-env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - airflow_state:/opt/airflow/state
+
+  airflow-dag-processor:
+    image: chu-airflow:3.3.2
+    container_name: chu-airflow-dag-processor
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: ["dag-processor"]
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+
+  airflow-scheduler:
+    image: chu-airflow:3.3.2
+    container_name: chu-airflow-scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      spark:
+        condition: service_started
+    command: ["scheduler"]
+    group_add: ["0"]            # accès au socket Docker (root:root 660 sous Docker Desktop)
+    environment: *airflow-env
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags:ro
+      - /var/run/docker.sock:/var/run/docker.sock
 
   # Interface web d'administration : http://localhost:5050
   pgadmin:
@@ -135,3 +267,5 @@ volumes:
   pg_data:
   silver_warehouse:
   pgadmin_data:
+  bao_tokens:
+  airflow_state:

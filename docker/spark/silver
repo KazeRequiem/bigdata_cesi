@@ -2,6 +2,13 @@
 # Lance silver_cli.py avec la configuration Iceberg.
 #   silver ddl | silver run --job all | silver qualite --out ... | silver export --tables all
 set -e
+
+# Secrets : lus dans OpenBao quand BAO_ADDR est défini (clé de pseudonymisation, clés S3, compte etl).
+# Sans BAO_ADDR, on garde les variables d'environnement (tests locaux). L'affectation intermédiaire fait
+# échouer le lanceur (set -e) si la lecture échoue : jamais de démarrage avec une clé manquante.
+secrets="$(python3 /usr/local/bin/bao-secrets.py)"
+eval "$secrets"
+
 exec spark-submit \
   --master "${SPARK_MASTER:-local[*]}" \
   --driver-memory "${SPARK_DRIVER_MEMORY:-4g}" \
