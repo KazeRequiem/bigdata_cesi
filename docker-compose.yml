@@ -47,6 +47,59 @@ services:
       timeout: 5s
       retries: 30
 
+  # Coffre de secrets (OpenBao, mode développement) : http://localhost:8200
+  # Les secrets du .env y sont rangés au démarrage par openbao-init ; Silver les lit au lancement d'un job.
+  # Mode développement = coffre EN MÉMOIRE : après un redémarrage d'openbao seul, relancer
+  #   docker compose up -d --force-recreate openbao-init
+  openbao:
+    image: openbao/openbao:2.7.2
+    container_name: chu-openbao
+    restart: unless-stopped
+    cap_add: [IPC_LOCK]
+    # -config : journal d'audit déclaratif (cette version d'OpenBao refuse de l'activer par commande)
+    command: ["server", "-dev", "-config=/etc/bao/audit.hcl"]
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: ${OPENBAO_ROOT_TOKEN}
+      BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    volumes:
+      - ./docker/openbao/audit.hcl:/etc/bao/audit.hcl:ro
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Range les secrets dans le coffre, active le journal d'audit, crée le jeton de lecture de Silver (puis s'arrête)
+  openbao-init:
+    image: openbao/openbao:2.7.2
+    container_name: chu-openbao-init
+    restart: "no"
+    user: "0:0"        # doit pouvoir écrire dans le volume bao_tokens (créé par root)
+    depends_on:
+      openbao:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${OPENBAO_ROOT_TOKEN}
+      SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      ETL_USER: ${ETL_USER}
+      ETL_PASSWORD: ${ETL_PASSWORD}
+      BI_USER: ${BI_USER}
+      BI_PASSWORD: ${BI_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # facultatif : rangés dans le coffre s'ils sont définis dans le .env racine
+      SFTP_USER: ${SFTP_USER:-}
+      SFTP_PASSWORD: ${SFTP_PASSWORD:-}
+    volumes:
+      - ./docker/openbao/init.sh:/init/init.sh:ro
+      - bao_tokens:/tokens
+
   # Spark 3.5 + Iceberg : jobs Silver et export vers staging
   spark:
     build: ./docker/spark
@@ -58,26 +111,23 @@ services:
         condition: service_healthy
       seaweedfs:
         condition: service_started
+      openbao-init:
+        condition: service_completed_successfully
     environment:
-      # Spark utilise le compte etl : catalogue Iceberg + écriture dans staging uniquement
+      # Aucun secret ici : la clé de pseudonymisation, les clés S3 et le compte etl (catalogue Iceberg + écriture
+      # dans staging uniquement) sont lus dans OpenBao par le lanceur `silver` (docker/spark/bao-secrets.py).
+      BAO_ADDR: http://openbao:8200
       POSTGRES_HOST: postgres
-      POSTGRES_USER: ${ETL_USER}
-      POSTGRES_PASSWORD: ${ETL_PASSWORD}
       ICEBERG_CATALOG_DB: ${ICEBERG_CATALOG_DB}
       ICEBERG_WAREHOUSE: file:///data/warehouse
       SPARK_DRIVER_MEMORY: ${SPARK_DRIVER_MEMORY}
       # Bronze dans SeaweedFS ; BRONZE_ROOT=/data/bronze dans le .env pour lire ./data/bronze
       BRONZE_ROOT: ${BRONZE_ROOT:-s3a://bronze}
       S3_ENDPOINT: http://seaweedfs:8333
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
-      S3_SECRET_KEY: ${S3_SECRET_KEY}
       SILVER_STORAGE: iceberg
       SILVER_CATALOG: lake
       SILVER_NAMESPACE: silver
-      SILVER_HMAC_KEY: ${SILVER_HMAC_KEY}
       PG_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
-      PG_USER: ${ETL_USER}
-      PG_PASSWORD: ${ETL_PASSWORD}
     command: ["sleep", "infinity"]
     ports:
       - "4040:4040"   # Spark UI pendant un job
@@ -85,6 +135,7 @@ services:
       - ./silver:/opt/silver
       - ./data/bronze:/data/bronze:ro
       - silver_warehouse:/data/warehouse
+      - bao_tokens:/run/bao:ro      # jeton de lecture de Silver, créé par openbao-init
 
   # Interface web d'administration : http://localhost:5050
   pgadmin:
@@ -135,3 +186,4 @@ volumes:
   pg_data:
   silver_warehouse:
   pgadmin_data:
+  bao_tokens:

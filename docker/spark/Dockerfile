@@ -22,7 +22,10 @@ ENV PATH=/opt/spark/bin:$PATH \
     PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
 
 COPY silver /usr/local/bin/silver
-RUN sed -i 's/\r$//' /usr/local/bin/silver && chmod 755 /usr/local/bin/silver \
+# lecteur des secrets OpenBao, appelé par le lanceur `silver`
+COPY bao-secrets.py /usr/local/bin/bao-secrets.py
+RUN sed -i 's/\r$//' /usr/local/bin/silver /usr/local/bin/bao-secrets.py && chmod 755 /usr/local/bin/silver \
+ && chmod 644 /usr/local/bin/bao-secrets.py \
  && mkdir -p /data/warehouse /data/bronze && chown -R spark:spark /data \
  && python3 -c "import pyspark, openpyxl; print('pyspark', pyspark.__version__)"
 

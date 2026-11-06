@@ -28,6 +28,11 @@ d'indicateurs `gold.v_*` servent de jeux de données.
 pgAdmin : http://localhost:5050 (identifiants `PGADMIN_EMAIL` / `PGADMIN_PASSWORD` du `.env`).
 Le serveur « CHU - chu_dw » est déjà déclaré ; mot de passe demandé : `POSTGRES_PASSWORD`.
 
+OpenBao (coffre de secrets, mode développement) : http://localhost:8200, jeton `OPENBAO_ROOT_TOKEN` du `.env`.
+Au démarrage, `openbao-init` y range la clé de pseudonymisation, les clés S3 et les comptes PostgreSQL du `.env` ;
+le lanceur `silver` les lit dans le coffre à chaque job : le conteneur `spark` ne reçoit plus aucun secret
+dans son environnement. Détails, limites et commandes : `docker/openbao/README.md`.
+
 Vérifications :
 
 ```bash
