@@ -1,0 +1,30 @@
+#!/bin/bash
+# Lance silver_cli.py avec la configuration Iceberg.
+#   silver ddl | silver run --job all | silver qualite --out ... | silver export --tables all
+set -e
+
+# Secrets : lus dans OpenBao quand BAO_ADDR est défini (clé de pseudonymisation, clés S3, compte etl).
+# Sans BAO_ADDR, on garde les variables d'environnement (tests locaux). L'affectation intermédiaire fait
+# échouer le lanceur (set -e) si la lecture échoue : jamais de démarrage avec une clé manquante.
+secrets="$(python3 /usr/local/bin/bao-secrets.py)"
+eval "$secrets"
+
+exec spark-submit \
+  --master "${SPARK_MASTER:-local[*]}" \
+  --driver-memory "${SPARK_DRIVER_MEMORY:-4g}" \
+  --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+  --conf spark.sql.catalog.lake=org.apache.iceberg.spark.SparkCatalog \
+  --conf spark.sql.catalog.lake.catalog-impl=org.apache.iceberg.jdbc.JdbcCatalog \
+  --conf "spark.sql.catalog.lake.uri=jdbc:postgresql://${POSTGRES_HOST:-postgres}:5432/${ICEBERG_CATALOG_DB:-iceberg_catalog}" \
+  --conf "spark.sql.catalog.lake.jdbc.user=${POSTGRES_USER}" \
+  --conf "spark.sql.catalog.lake.jdbc.password=${POSTGRES_PASSWORD}" \
+  --conf "spark.sql.catalog.lake.warehouse=${ICEBERG_WAREHOUSE:-file:///data/warehouse}" \
+  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+  --conf "spark.hadoop.fs.s3a.endpoint=${S3_ENDPOINT:-http://seaweedfs:8333}" \
+  --conf spark.hadoop.fs.s3a.endpoint.region=us-east-1 \
+  --conf spark.hadoop.fs.s3a.path.style.access=true \
+  --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+  --conf spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider \
+  --conf "spark.hadoop.fs.s3a.access.key=${S3_ACCESS_KEY}" \
+  --conf "spark.hadoop.fs.s3a.secret.key=${S3_SECRET_KEY}" \
+  /opt/silver/silver_cli.py "$@"
