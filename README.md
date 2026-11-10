@@ -16,14 +16,16 @@ celles du `.env` racine priment (SeaweedFS et Spark ont donc toujours les mêmes
 identiques pour pouvoir aussi lancer Bronze seul.
 
 Au premier démarrage, PostgreSQL crée la base `iceberg_catalog`, exécute `sql/01` à `07`
-dans `chu_dw` (couche Gold et staging), `sql/12_vues_indicateurs.sql`, puis `sql/11_droits.sql`
+dans `chu_dw` (couche Gold et staging), `sql/12_vues_indicateurs.sql`, `sql/13_vues_dashboard.sql`, puis `sql/11_droits.sql`
 (comptes `etl` et `bi`). La base `superset` est aussi créée.
 Pour recréer seulement Gold : `docker compose rm -sf postgres` puis `docker volume rm chu-lakehouse_pg_data`.
 Jamais `docker compose down -v` : il efface aussi Bronze (fichiers SeaweedFS, flux NiFi, base source).
 
 Superset : http://localhost:8088 (identifiants `SUPERSET_ADMIN_USER` / `SUPERSET_ADMIN_PASSWORD`).
-La connexion « CHU Gold » (compte `bi`, lecture seule) est déclarée au démarrage ; les vues
-d'indicateurs `gold.v_*` servent de jeux de données.
+La connexion « CHU Gold » (compte `bi`, lecture seule) est déclarée au démarrage.
+Tableaux de bord du Livrable 3 (Vue d'ensemble, Praticiens, Direction), rôles Praticien / Direction et
+requêtes de démonstration SQL Lab : construits par script, voir `docker/superset/dashboards/README.md`
+(`docker compose exec superset python /app/dashboards/construire_dashboards.py`).
 
 pgAdmin : http://localhost:5050 (identifiants `PGADMIN_EMAIL` / `PGADMIN_PASSWORD` du `.env`).
 Le serveur « CHU - chu_dw » est déjà déclaré ; mot de passe demandé : `POSTGRES_PASSWORD`.
