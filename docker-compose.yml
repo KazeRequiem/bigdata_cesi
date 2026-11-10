@@ -257,11 +257,21 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       BI_USER: ${BI_USER}
       BI_PASSWORD: ${BI_PASSWORD}
+      # comptes de démonstration praticien_demo / direction_demo (créés par construire_dashboards.py)
+      SUPERSET_DEMO_PASSWORD: ${SUPERSET_DEMO_PASSWORD:-}
+      # processus du serveur web (1 par défaut dans l'image) : 3 calculent en parallèle les ~10 graphiques
+      # d'un onglet quand on applique un filtre (~300 Mo de RAM par processus)
+      SERVER_WORKER_AMOUNT: ${SUPERSET_WORKERS:-3}
     command: ["/app/init_chu.sh"]
     ports:
       - "8088:8088"
     volumes:
       - ./docker/superset/superset_config.py:/app/superset_config_chu.py:ro
+      # Livrable 3 : script de construction des tableaux de bord et mesure des temps de réponse
+      #   docker compose exec superset python /app/dashboards/construire_dashboards.py
+      #   docker compose exec superset python /app/benchmark/mesurer.py
+      - ./docker/superset/dashboards:/app/dashboards:ro
+      - ./benchmark:/app/benchmark:ro
 
 volumes:
   pg_data:
