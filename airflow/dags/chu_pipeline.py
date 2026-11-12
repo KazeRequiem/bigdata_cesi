@@ -2,7 +2,7 @@
 
 Les tâches pilotent les conteneurs existants avec `docker exec` (le socket Docker est monté dans airflow-scheduler) :
   chu-spark     -> silver ddl | run --job <table> | export | qualite   (les secrets viennent d'OpenBao, pas d'Airflow)
-  chu-postgres  -> psql -f /sql/08, 09, 10
+  chu-postgres  -> psql -f /sql/08, 09, 10, 14
 Ordre de l'architecture (Livrable 1) : S2 (établissements) d'abord, puis les autres sources ; chaque job Silver
 attend ses référentiels. Déclenchement manuel (schedule=None) ; pour un lot quotidien : schedule="0 2 * * *".
 """
@@ -108,6 +108,8 @@ with DAG(
     dims = BashOperator(task_id="gold_dimensions", bash_command=psql("08_charger_dimensions.sql"))
     faits = BashOperator(task_id="gold_faits", bash_command=psql("09_charger_faits.sql"))
     v0 = BashOperator(task_id="gold_copie_v0", bash_command=psql("10_copier_v0.sql"))
+    # vues matérialisées des tableaux de bord Superset (Livrable 3), recalculées après chaque chargement
+    vues_bi = BashOperator(task_id="gold_vues_dashboard", bash_command=psql("14_rafraichir_vues_dashboard.sql"))
     qualite = BashOperator(task_id="rapport_qualite",
                            bash_command=silver("qualite --out /opt/silver/docs/rapport_qualite_airflow.md"))
-    precedent >> export >> dims >> faits >> v0 >> qualite
+    precedent >> export >> dims >> faits >> v0 >> vues_bi >> qualite
