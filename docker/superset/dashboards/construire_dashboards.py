@@ -31,6 +31,12 @@ SCHEMA = "gold"
 ANNEE_DECES = 2019          # B7 : année demandée par l'énoncé
 ANNEE_SATISFACTION = 2020   # B8 : année demandée par l'énoncé
 SEUIL_PATIENTS = 10         # gouvernance : aucun professionnel affiché sous 10 patients distincts
+# Population France entière = SUM(population_2019) de gold.ref_population_region (INSEE 2019, Mayotte 2017).
+# Écrite en constante : Superset 4.1 refuse les sous-requêtes dans une métrique SQL personnalisée.
+POPULATION_FRANCE_2019 = 67244921
+# Onglet Performance : cache court pour afficher sans attendre une mesure relancée par le DAG Airflow chu_benchmark
+CACHE_BENCH = 60            # secondes (24 h pour les autres graphiques)
+URL_DAG_BENCHMARK = os.environ.get("AIRFLOW_URL", "http://localhost:8080") + "/dags/chu_benchmark"
 
 # Palette dédiée aux pyramides (déclarée dans superset_config.py : femmes en rose, hommes en bleu)
 PALETTE_SEXE = "chu_femmes_hommes"
@@ -542,12 +548,12 @@ class Graphiques:
         self.api, self.jeux, self.ids, self.jeu_de = api, jeux, {}, {}
         self.existants = existants
 
-    def ajouter(self, cle, titre, jeu, params, description=""):
+    def ajouter(self, cle, titre, jeu, params, description="", cache=86400):
         ds = self.jeux[jeu]
         params = dict(params, datasource=f"{ds}__table", slice_name=titre)
         corps = {"slice_name": titre, "viz_type": params["viz_type"], "datasource_id": ds,
                  "datasource_type": "table", "params": json.dumps(params),
-                 "description": f"[L3:{cle}] {description}".strip(), "cache_timeout": 86400}
+                 "description": f"[L3:{cle}] {description}".strip(), "cache_timeout": cache}
         if cle in self.existants:
             self.ids[cle] = self.existants[cle]
             self.api.put(f"chart/{self.ids[cle]}", corps)
@@ -964,8 +970,7 @@ def construire(api, jeux, c, existants):
     g.ajouter("di_kpi_taux", "Décès pour 100 000 habitants", "mv_deces",
               kpi({"expressionType": "SQL", "label": "Décès pour 100 000 hab.", "hasCustomLabel": True,
                    "optionName": "taux_france",
-                   "sqlExpression": "100000.0 * SUM(nb_deces) / "
-                                    "(SELECT SUM(population_2019) FROM gold.ref_population_region)"},
+                   "sqlExpression": f"100000.0 * SUM(nb_deces) / {POPULATION_FRANCE_2019}"},
                   "France entière (population INSEE 2019)", fmt=",.0f"))
     g.ajouter("di_carte_nb", "B7 - Nombre de décès par région", "mv_deces",
               carte("nb_deces", filtres=[region_connue], couleurs="purples"))
@@ -1039,15 +1044,17 @@ def construire(api, jeux, c, existants):
               "bench_resultats", {**barres("requete", ["temps_ms"], horizontal=False, groupby=["configuration"],
                                            tri="requete", tri_asc=True, fmt=",.1f"), "logAxis": True,
                                   "show_value": True, "y_axis_bounds": [0.1, None]},
-              "Médiane de 5 exécutions à chaud, mesurée par benchmark/mesurer.py.")
+              "Médiane de 5 exécutions à chaud, mesurée par benchmark/mesurer.py.", cache=CACHE_BENCH)
     g.ajouter("di_bench_table", "Détail des mesures", "bench_resultats",
               {"viz_type": "table", "query_mode": "raw",
                "all_columns": ["requete", "libelle", "configuration", "mediane_ms", "min_ms", "max_ms", "nb_lignes",
                                "date_mesure"],
                "order_by_cols": [json.dumps(["requete", True])], "row_limit": 1000, "server_pagination": False,
-               "page_length": 30, "include_search": True, "adhoc_filters": [], "table_timestamp_format": "%d/%m/%Y %H:%M"})
+               "page_length": 30, "include_search": True, "adhoc_filters": [], "table_timestamp_format": "%d/%m/%Y %H:%M"},
+              cache=CACHE_BENCH)
     md_perf = bandeau("Avant = gold_v0 (ni partition ni index) · Après = gold (partitions annuelles + index) · "
-                      "Vue BI = vues matérialisées gold.mv_* · " + resume_benchmark(c["bench"]))
+                      "Vue BI = vues matérialisées gold.mv_* · " + resume_benchmark(c["bench"]) +
+                      f" · relancer la mesure : [Airflow › chu_benchmark]({URL_DAG_BENCHMARK})")
 
     di = Page("CHU - Direction", g)
     di.onglet("Activité des établissements", [
@@ -1079,8 +1086,12 @@ def construire(api, jeux, c, existants):
     filtres_di = [
         filtre("di_annee", "Année (activité)", "mv_consultations", "annee", di, onglets=["Activité des établissements"]),
         filtre("di_region", "Région", "mv_consultations", "region", di, onglets=["Activité des établissements"]),
+        # B1 exclu : sa part est calculée sur les lignes filtrées (fenêtre SUM() OVER ()), un établissement
+        # filtré afficherait donc 100 %. Le Top 15 B1 garde la référence nationale de la période.
         filtre("di_etab", "Établissement", "mv_consultations", "etablissement", di,
-               onglets=["Activité des établissements"]),
+               onglets=["Activité des établissements"], exclure=["di_top_etab"],
+               description="Restreint l'activité à un établissement. Le Top 15 B1 n'est pas filtré : il garde "
+                           "la part de chaque établissement dans toutes les consultations rattachées."),
         filtre("di_annee_deces", "Année des décès", "mv_deces", "annee", di, onglets=["Mortalité"],
                exclure=["di_evol_deces"], defaut=[ANNEE_DECES], multiple=False),
         filtre("di_sexe_deces", "Sexe", "mv_deces", "sexe", di, onglets=["Mortalité"]),

@@ -20,6 +20,7 @@ import re
 import statistics
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import psycopg2
@@ -143,7 +144,8 @@ def main():
             date_mesure    TIMESTAMP     NOT NULL,
             PRIMARY KEY (requete, configuration))""")
     cur.execute("TRUNCATE gold.bench_resultats")
-    maintenant = datetime.now()
+    # heure de Paris : le conteneur est en UTC, l'onglet Performance afficherait sinon 1 à 2 h de moins
+    maintenant = datetime.now(ZoneInfo("Europe/Paris")).replace(tzinfo=None)
     cur.executemany("INSERT INTO gold.bench_resultats VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     [r + (maintenant,) for r in resultats])
     print(f"{len(resultats)} mesures rangées dans gold.bench_resultats")
